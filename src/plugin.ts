@@ -192,7 +192,11 @@ export function shouldProcessModel(model: string | undefined): boolean {
 }
 
 const CURSOR_PROXY_HOST = "127.0.0.1";
-const CURSOR_PROXY_DEFAULT_PORT = 32124;
+export function resolveCursorProxyPort(value: string | undefined): number {
+  const port = Number(value);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 32124;
+}
+const CURSOR_PROXY_DEFAULT_PORT = resolveCursorProxyPort(process.env.CURSOR_ACP_PROXY_PORT);
 const CURSOR_PROXY_DEFAULT_BASE_URL = `http://${CURSOR_PROXY_HOST}:${CURSOR_PROXY_DEFAULT_PORT}/v1`;
 const CURSOR_PROXY_HEALTH_TIMEOUT_MS = 3000;
 const REUSE_EXISTING_PROXY = process.env.CURSOR_ACP_REUSE_EXISTING_PROXY !== "false";

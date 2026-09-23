@@ -3,9 +3,21 @@ import {
   fetchProxyHealthWithTimeout,
   isReusableProxyHealthPayload,
   normalizeWorkspaceForCompare,
+  resolveCursorProxyPort,
 } from "../../src/plugin.js";
 
 describe("proxy health reuse guard", () => {
+  test("uses a configured proxy port when valid", () => {
+    expect(resolveCursorProxyPort("54321")).toBe(54321);
+  });
+
+  test("uses the default proxy port when invalid", () => {
+    expect(resolveCursorProxyPort(undefined)).toBe(32124);
+    expect(resolveCursorProxyPort("0")).toBe(32124);
+    expect(resolveCursorProxyPort("65536")).toBe(32124);
+    expect(resolveCursorProxyPort("invalid")).toBe(32124);
+  });
+
   test("rejects payloads without ok=true", () => {
     expect(isReusableProxyHealthPayload(null, "/tmp/project")).toBe(false);
     expect(isReusableProxyHealthPayload({ ok: false }, "/tmp/project")).toBe(false);
