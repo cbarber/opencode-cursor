@@ -8,6 +8,7 @@ import { isUsableSdkApiKey } from "../auth.js";
 
 export type CursorBackendPreference = "auto" | "cursor-agent" | "sdk";
 export type CursorRuntimeBackend = "cursor-agent" | "sdk";
+export type CursorSdkSystemPromptMode = "message" | "replace";
 
 export interface BackendPreferenceParseResult {
   preference: CursorBackendPreference;
@@ -37,6 +38,16 @@ export function parseCursorBackendPreference(
   }
 
   return { preference: "auto", valid: false };
+}
+
+export function parseCursorSdkSystemPromptMode(
+  value: string | undefined,
+): CursorSdkSystemPromptMode | undefined {
+  const normalized = value?.trim().toLowerCase() || "message";
+  if (normalized === "message" || normalized === "replace") {
+    return normalized;
+  }
+  return undefined;
 }
 
 export function selectInitialBackend(

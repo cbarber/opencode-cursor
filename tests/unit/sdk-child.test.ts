@@ -34,6 +34,16 @@ function handle(line) {
   emit({
     id: request.id,
     event: {
+      type: "system",
+      subtype: Object.prototype.hasOwnProperty.call(request, "systemPrompt")
+        ? request.systemPrompt
+        : "system-prompt-omitted",
+    },
+  });
+
+  emit({
+    id: request.id,
+    event: {
       type: "assistant",
       message: {
         role: "assistant",
@@ -96,10 +106,24 @@ describe("sdk-child runner path resolution", () => {
     process.env.CURSOR_ACP_SDK_RUNNER_PATH = runnerPath;
 
     try {
+      const defaultChild = createSdkNodeChild({
+        apiKey: "cursor_123",
+        model: "auto",
+        prompt: "hello",
+        cwd: dir,
+      });
+      const [defaultStdout, defaultExitCode] = await Promise.all([
+        streamToString(defaultChild.stdout),
+        waitForClose(defaultChild),
+      ]);
+      expect(defaultExitCode).toBe(0);
+      expect(defaultStdout).toContain("system-prompt-omitted");
+
       const child = createSdkNodeChild({
         apiKey: "cursor_123",
         model: "auto",
         prompt: "hello",
+        systemPrompt: "OpenCode system",
         cwd: dir,
       });
 
@@ -110,6 +134,7 @@ describe("sdk-child runner path resolution", () => {
 
       expect(exitCode).toBe(0);
       expect(stdout).toContain("fake sdk response");
+      expect(stdout).toContain("OpenCode system");
 
       const models = await listModelsViaRunner("cursor_123");
       expect(models).toEqual([{ id: "fake-model", name: "Fake Model" }]);

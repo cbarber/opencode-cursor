@@ -3,7 +3,7 @@
  * sdk-runner.mjs
  *
  * Persistent Node.js runner for @cursor/sdk Agent.
- * Reads NDJSON lines from stdin: {"id":"<string>","model":"...","cwd":"...","prompt":"..."}
+ * Reads NDJSON lines from stdin with an optional `systemPrompt` field.
  * For each request, spawns/reuses an Agent and emits wrapped events to stdout:
  *   {"id":"<id>","event":{...StreamJsonEvent...}}
  * When request completes:
@@ -16,14 +16,8 @@
  *
  * ENVIRONMENT VARIABLES:
  * - CURSOR_API_KEY: Required. API key from cursor.com/settings.
- * - CURSOR_ACP_SETTING_SOURCES: (optional) CSV of setting sources to load.
- *   Defaults to empty (isolated mode: no Cursor env rules/skills/MCP per request).
- *   Examples: "all" (load everything), "user,project" (load user + project rules).
- *   See @cursor/sdk SettingSource type: "project"|"user"|"team"|"mdm"|"plugins"|"all".
- *
  * Usage:
  *   echo '{"id":"r1","model":"auto","cwd":".","prompt":"hello"}' | CURSOR_API_KEY=... node sdk-runner.mjs
- *   CURSOR_ACP_SETTING_SOURCES="user,project" CURSOR_API_KEY=... node sdk-runner.mjs < requests.ndjson
  *
  * Output: NDJSON wrapped events to stdout (one per line).
  * Diagnostics and timings: console.error only (never stdout).
@@ -39,17 +33,6 @@ let Cursor;
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const STREAM_JSON_EVENT_BUFFER_SIZE = 64 * 1024; // 64KB for line buffering
-
-/**
- * Parse CURSOR_ACP_SETTING_SOURCES env var (comma-separated, space-trimmed).
- * If undefined or empty, return [] (isolated: no Cursor env rules/skills/MCP per request).
- * Examples: "all" → ["all"], "user,project" → ["user","project"], "" → [].
- */
-const SETTING_SOURCES = (() => {
-  const raw = process.env.CURSOR_ACP_SETTING_SOURCES ?? "";
-  if (!raw.trim()) return [];
-  return raw.split(",").map((s) => s.trim()).filter(Boolean);
-})();
 
 // ─── Protocol stdout protection ─────────────────────────────────────────────
 // The Cursor SDK writes its own internal logs to process.stdout, which would
@@ -160,6 +143,17 @@ export function sdkMessageToStreamJson(msg) {
   }
 }
 
+export function buildAgentOptions({ apiKey, model, cwd, systemPrompt }) {
+  return {
+    apiKey,
+    model: { id: model },
+    mode: "agent",
+    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    disallowedTools: ["task"],
+    local: { cwd, settingSources: [] },
+  };
+}
+
 /**
  * Emit a wrapped NDJSON error event to stdout (per-request).
  */
@@ -224,7 +218,7 @@ async function handleListModels(id) {
  * Handle a single request: execute the prompt and emit wrapped events.
  */
 async function handleRequest(apiKey, request) {
-  const { id, model, cwd, prompt } = request;
+  const { id, model, cwd, prompt, systemPrompt } = request;
 
   // Validate required fields
   if (!id || !model || !cwd || !prompt) {
@@ -247,12 +241,7 @@ async function handleRequest(apiKey, request) {
   try {
     // Timing: Agent.create
     const createStart = Date.now();
-    agent = await Agent.create({
-      apiKey,
-      model: { id: model },
-      mode: "agent",
-      local: { cwd, settingSources: SETTING_SOURCES },
-    });
+    agent = await Agent.create(buildAgentOptions({ apiKey, model, cwd, systemPrompt }));
     const createMs = Date.now() - createStart;
     console.error(`[sdk-runner] Agent ready, sending prompt for request ${id}`);
 
@@ -316,9 +305,6 @@ async function main() {
       console.error("[sdk-runner] CURSOR_API_KEY not set");
       process.exit(1);
     }
-
-    // Log settingSources config at boot
-    console.error(`[sdk-runner] settingSources: ${JSON.stringify(SETTING_SOURCES)}`);
 
     // Import Agent dynamically now that API key is validated
     // This accelerates boot time if the runner is forked without a valid key

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   isUsableSdkApiKey,
   parseCursorBackendPreference,
+  parseCursorSdkSystemPromptMode,
   resolveSdkApiKey,
   selectBackendForRequest,
   selectInitialBackend,
@@ -15,6 +16,14 @@ describe("provider backend compatibility", () => {
     expect(parseCursorBackendPreference("cursor-agent")).toEqual({ preference: "cursor-agent", valid: true });
     expect(parseCursorBackendPreference("sdk")).toEqual({ preference: "sdk", valid: true });
     expect(parseCursorBackendPreference("nonsense")).toEqual({ preference: "auto", valid: false });
+  });
+
+  it("defaults SDK system prompts to messages and validates replacement mode", () => {
+    expect(parseCursorSdkSystemPromptMode(undefined)).toEqual({ mode: "message", valid: true });
+    expect(parseCursorSdkSystemPromptMode(" ")).toEqual({ mode: "message", valid: true });
+    expect(parseCursorSdkSystemPromptMode("message")).toEqual({ mode: "message", valid: true });
+    expect(parseCursorSdkSystemPromptMode("replace")).toEqual({ mode: "replace", valid: true });
+    expect(parseCursorSdkSystemPromptMode("nonsense")).toEqual({ mode: "message", valid: false });
   });
 
   it("does not treat the historical cursor-agent placeholder as a real SDK API key", () => {

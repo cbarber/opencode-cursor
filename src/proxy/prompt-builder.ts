@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { buildToolSchemaMap, applyToolSchemaCompat, tryRerouteEditToWrite } from "../provider/tool-schema-compat.js";
 import type { OpenAiToolCall } from "./tool-loop.js";
+import { extractTextContent, type ProxyMessage } from "./incremental-prompt.js";
 import { createLogger } from "../utils/logger.js";
 
 const log = createLogger("proxy:prompt-builder");
@@ -39,6 +40,16 @@ export function buildToolFingerprint(tools: Array<any>): string {
   });
   parts.sort();
   return `${parts.length}:${parts.join("|")}`;
+}
+
+export function extractSystemPromptFromMessages(messages: ProxyMessage[]): string {
+  const segments: string[] = [];
+  for (const message of messages) {
+    if (message.role !== "system") continue;
+    const text = extractTextContent(message.content);
+    if (text) segments.push(text);
+  }
+  return segments.join("\n\n");
 }
 
 function buildToolSchemaBlock(tools: Array<any>): string {
