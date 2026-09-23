@@ -185,6 +185,7 @@ export async function ensurePluginDirectory(): Promise<void> {
 
 export const CURSOR_PROVIDER_ID = "cursor-acp";
 const CURSOR_PROVIDER_PREFIX = `${CURSOR_PROVIDER_ID}/`;
+export const OPENCODE_CONVERSATION_HEADER = "x-opencode-conversation-key";
 
 export function shouldProcessModel(model: string | undefined): boolean {
   if (!model) return false;
@@ -294,6 +295,8 @@ export function buildCursorAgentCommand(
  */
 export interface ResolvedPrompt {
   prompt: string;
+  incrementalPrompt?: string;
+  conversationKey?: string;
   systemPrompt?: string;
   resumeChatId?: string;
   sessionKey?: string;
@@ -306,11 +309,9 @@ export interface ResolvedPrompt {
 /**
  * Resolve the prompt to send to the backend.
  *
- * Only the cursor-agent backend supports `--resume`. When a chatId is available
- * and the last message can be expressed as a safe delta, an incremental prompt
- * is returned; otherwise the full flattened prompt is used. Even when the
- * incremental prompt is unavailable, `--resume` is still passed so cursor-agent
- * conversation state is reused.
+ * The SDK receives both a recovery prompt and a safe delta so its runner can
+ * choose based on whether the conversation is cached. The cursor-agent backend
+ * uses `--resume` when a chatId is available.
  *
  * The returned `sessionKey`/`contentPrefix` are always populated on the
  * cursor-agent + resume-enabled path so the response can seed the cache.
@@ -321,6 +322,7 @@ export function resolvePromptForBackend(input: {
   tools: Array<any>;
   model: string;
   workspaceDirectory: string;
+  conversationKey?: string;
 }): ResolvedPrompt {
   const { mode: systemPromptMode, valid: systemPromptModeValid } = parseCursorSdkSystemPromptMode(
     process.env.OPEN_CURSOR_SDK_SYSTEM_PROMPT_MODE,
@@ -345,6 +347,16 @@ export function resolvePromptForBackend(input: {
   let fullPrompt: string | undefined;
   const getFullPrompt = () =>
     fullPrompt ??= buildPromptFromMessages(promptMessages, input.tools);
+
+  if (input.backend === "sdk") {
+    return {
+      prompt: getFullPrompt(),
+      incrementalPrompt: input.conversationKey ? buildIncrementalPrompt(input.messages) ?? undefined : undefined,
+      conversationKey: input.conversationKey,
+      systemPrompt,
+      usedIncremental: false,
+    };
+  }
 
   if (input.backend !== "cursor-agent" || !isSessionResumeEnabled()) {
     return { prompt: getFullPrompt(), systemPrompt, usedIncremental: false };
@@ -583,6 +595,8 @@ function createBunChildForBackend(input: {
   sdkApiKey?: string;
   model: string;
   prompt: string;
+  incrementalPrompt?: string;
+  conversationKey?: string;
   systemPrompt?: string;
   workspaceDirectory: string;
   resumeChatId?: string;
@@ -595,6 +609,8 @@ function createBunChildForBackend(input: {
       apiKey: input.sdkApiKey,
       model: input.model,
       prompt: input.prompt,
+      incrementalPrompt: input.incrementalPrompt,
+      conversationKey: input.conversationKey,
       systemPrompt: input.systemPrompt,
       cwd: input.workspaceDirectory,
     });
@@ -630,6 +646,8 @@ function createNodeChildForBackend(input: {
   sdkApiKey?: string;
   model: string;
   prompt: string;
+  incrementalPrompt?: string;
+  conversationKey?: string;
   systemPrompt?: string;
   workspaceDirectory: string;
   resumeChatId?: string;
@@ -642,6 +660,8 @@ function createNodeChildForBackend(input: {
       apiKey: input.sdkApiKey,
       model: input.model,
       prompt: input.prompt,
+      incrementalPrompt: input.incrementalPrompt,
+      conversationKey: input.conversationKey,
       systemPrompt: input.systemPrompt,
       cwd: input.workspaceDirectory,
     });
@@ -1325,6 +1345,7 @@ export async function ensureCursorProxyServer(workspaceDirectory: string, toolRo
       const authHeader = req.headers.get("authorization");
       const sdkApiKey = resolveRequestSdkApiKey(authHeader);
       const backend = resolveBackendForRequest(sdkApiKey);
+      const conversationKey = req.headers.get(OPENCODE_CONVERSATION_HEADER) || undefined;
       reqPerf.mark("backend-resolved");
       const resolvedPrompt = resolvePromptForBackend({
         backend,
@@ -1332,8 +1353,12 @@ export async function ensureCursorProxyServer(workspaceDirectory: string, toolRo
         tools,
         model,
         workspaceDirectory,
+        conversationKey,
       });
       const prompt = applyBridgeJsonPrompt(resolvedPrompt.prompt, { allowedToolNames });
+      const incrementalPrompt = resolvedPrompt.incrementalPrompt
+        ? applyBridgeJsonPrompt(resolvedPrompt.incrementalPrompt, { allowedToolNames })
+        : undefined;
       const {
         systemPrompt,
         resumeChatId,
@@ -1375,6 +1400,8 @@ export async function ensureCursorProxyServer(workspaceDirectory: string, toolRo
         sdkApiKey,
         model,
         prompt,
+        incrementalPrompt,
+        conversationKey: resolvedPrompt.conversationKey,
         systemPrompt,
         workspaceDirectory,
         resumeChatId,
@@ -1969,6 +1996,9 @@ export async function ensureCursorProxyServer(workspaceDirectory: string, toolRo
       const authHeaderNode = req.headers["authorization"] as string | undefined;
       const sdkApiKeyNode = resolveRequestSdkApiKey(authHeaderNode);
       const backend = resolveBackendForRequest(sdkApiKeyNode);
+      const conversationKeyNode = typeof req.headers[OPENCODE_CONVERSATION_HEADER] === "string"
+        ? req.headers[OPENCODE_CONVERSATION_HEADER]
+        : undefined;
       reqPerf.mark("backend-resolved");
       const resolvedPrompt = resolvePromptForBackend({
         backend,
@@ -1976,8 +2006,12 @@ export async function ensureCursorProxyServer(workspaceDirectory: string, toolRo
         tools,
         model,
         workspaceDirectory,
+        conversationKey: conversationKeyNode,
       });
       const prompt = applyBridgeJsonPrompt(resolvedPrompt.prompt, { allowedToolNames });
+      const incrementalPrompt = resolvedPrompt.incrementalPrompt
+        ? applyBridgeJsonPrompt(resolvedPrompt.incrementalPrompt, { allowedToolNames })
+        : undefined;
       const {
         systemPrompt,
         resumeChatId,
@@ -2020,6 +2054,8 @@ export async function ensureCursorProxyServer(workspaceDirectory: string, toolRo
         sdkApiKey: sdkApiKeyNode,
         model,
         prompt,
+        incrementalPrompt,
+        conversationKey: resolvedPrompt.conversationKey,
         systemPrompt,
         workspaceDirectory,
         resumeChatId,
@@ -3114,6 +3150,16 @@ export const CursorPlugin: Plugin = async ({ $, directory, worktree, client, ser
           tailNames: afterTools.slice(-10).map((t: any) => t?.function?.name ?? t?.name ?? "unknown"),
         });
       }
+    },
+
+    async "chat.headers"(input: any, output: { headers: Record<string, string> }) {
+      const boundaryContext = createBoundaryRuntimeContext("chat.headers");
+      const providerMatch = boundaryContext.run("matchesProvider", (boundary) =>
+        boundary.matchesProvider(input.model),
+      );
+      if (!providerMatch || typeof input.sessionID !== "string" || !input.sessionID.trim()) return;
+      const agent = typeof input.agent === "string" && input.agent.trim() ? input.agent.trim() : "default";
+      output.headers[OPENCODE_CONVERSATION_HEADER] = `${encodeURIComponent(input.sessionID.trim())}:${encodeURIComponent(agent)}`;
     },
 
     async "experimental.chat.system.transform"(input: any, output: { system: string[] }) {

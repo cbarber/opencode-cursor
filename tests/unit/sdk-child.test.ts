@@ -47,7 +47,11 @@ function handle(line) {
       type: "assistant",
       message: {
         role: "assistant",
-        content: [{ type: "text", text: "fake sdk response" }],
+        content: [{ type: "text", text: JSON.stringify({
+          prompt: request.prompt,
+          incrementalPrompt: request.incrementalPrompt,
+          conversationKey: request.conversationKey,
+        }) }],
       },
     },
   });
@@ -123,6 +127,8 @@ describe("sdk-child runner path resolution", () => {
         apiKey: "cursor_123",
         model: "auto",
         prompt: "hello",
+        incrementalPrompt: "follow up",
+        conversationKey: "session-1:build",
         systemPrompt: "OpenCode system",
         cwd: dir,
       });
@@ -133,7 +139,8 @@ describe("sdk-child runner path resolution", () => {
       ]);
 
       expect(exitCode).toBe(0);
-      expect(stdout).toContain("fake sdk response");
+      expect(stdout).toContain('\\"incrementalPrompt\\":\\"follow up\\"');
+      expect(stdout).toContain('\\"conversationKey\\":\\"session-1:build\\"');
       expect(stdout).toContain("OpenCode system");
 
       const models = await listModelsViaRunner("cursor_123");

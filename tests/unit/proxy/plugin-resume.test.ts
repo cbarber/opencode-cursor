@@ -56,6 +56,23 @@ describe("plugin resume orchestration", () => {
     expect(result.prompt).toContain("USER: Remember BETA");
   });
 
+  it("resolvePromptForBackend: SDK preserves a recovery prompt and sends only the new turn to a cached conversation", () => {
+    const result = resolvePromptForBackend({
+      ...baseInput,
+      backend: "sdk" as const,
+      conversationKey: "session-1\0build",
+      messages: [
+        { role: "user", content: "Remember BETA" },
+        { role: "assistant", content: "Got it." },
+        { role: "user", content: "What was the codeword?" },
+      ],
+    });
+
+    expect(result.prompt).toContain("ASSISTANT: Got it.");
+    expect(result.incrementalPrompt).toBe("What was the codeword?");
+    expect(result.conversationKey).toBe("session-1\0build");
+  });
+
   it("resolvePromptForBackend: SDK replacement separates ordered system text", () => {
     process.env.OPEN_CURSOR_SDK_SYSTEM_PROMPT_MODE = "replace";
     const result = resolvePromptForBackend({

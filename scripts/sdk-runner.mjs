@@ -10,8 +10,7 @@
  *   {"id":"<id>","done":true,"exitCode":0|1}
  *
  * OPERATIONS:
- * - default: {"id","model","cwd","prompt"} -> runs a fresh Agent per request
- *   (no caching: conversation state must stay in OpenCode, see handleRequest)
+ * - default: {"id","model","cwd","prompt"} -> runs an Agent request
  * - {"id","op":"listModels"} -> emits {"type":"models","models":[{id,name}]}
  *
  * ENVIRONMENT VARIABLES:
@@ -29,6 +28,8 @@ import { pathToFileURL } from "node:url";
 // Import Agent and Cursor dynamically after API key check to accelerate boot time
 let Agent;
 let Cursor;
+const agents = new Map();
+const MAX_AGENTS = 64;
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -133,6 +134,8 @@ export function sdkMessageToStreamJson(msg) {
         };
       return null;
     }
+    case "usage":
+      return { type: "result", subtype: "usage", usage: msg.usage };
     case "system":
       return {
         type: "system",
@@ -143,15 +146,55 @@ export function sdkMessageToStreamJson(msg) {
   }
 }
 
+export function normalizeSdkModelId(model) {
+  const normalized = model.replace(
+    /-(?:thinking-(?:low|medium|high|max|xhigh)|(?:low|medium|high|max|xhigh|none|extra-high)(?:-fast)?|fast|thinking)$/,
+    "",
+  );
+  const versionFirst = normalized.match(/^claude-(\d+(?:\.\d+)?)-(sonnet|opus|haiku)$/);
+  if (versionFirst) return `claude-${versionFirst[2]}-${versionFirst[1].replaceAll(".", "-")}`;
+  return normalized.replace(/^(claude-(?:sonnet|opus|haiku)-\d+)\.(\d+)$/, "$1-$2");
+}
+
 export function buildAgentOptions({ apiKey, model, cwd, systemPrompt }) {
   return {
     apiKey,
-    model: { id: model },
+    model: { id: normalizeSdkModelId(model) },
     mode: "agent",
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     disallowedTools: ["task"],
     local: { cwd, settingSources: [] },
   };
+}
+
+export async function acquireSdkAgent(apiKey, request, cache = agents, createAgent = (options) => Agent.create(options)) {
+  const { model, cwd, prompt, incrementalPrompt, conversationKey, systemPrompt } = request;
+  const options = buildAgentOptions({ apiKey, model, cwd, systemPrompt });
+  const fingerprint = JSON.stringify(options);
+  const cached = conversationKey ? cache.get(conversationKey) : undefined;
+
+  if (cached && cached.fingerprint === fingerprint && incrementalPrompt) {
+    cache.delete(conversationKey);
+    cache.set(conversationKey, cached);
+    return { agent: cached.agent, prompt: incrementalPrompt, retained: true };
+  }
+
+  if (cached) {
+    cache.delete(conversationKey);
+    await cached.agent[Symbol.asyncDispose]?.().catch(() => {});
+  }
+
+  const agent = await createAgent(options);
+  if (!conversationKey) return { agent, prompt, retained: false };
+
+  while (cache.size >= MAX_AGENTS) {
+    const oldestKey = cache.keys().next().value;
+    const oldest = cache.get(oldestKey);
+    cache.delete(oldestKey);
+    await oldest?.agent[Symbol.asyncDispose]?.().catch(() => {});
+  }
+  cache.set(conversationKey, { agent, fingerprint });
+  return { agent, prompt, retained: true };
 }
 
 /**
@@ -218,7 +261,7 @@ async function handleListModels(id) {
  * Handle a single request: execute the prompt and emit wrapped events.
  */
 async function handleRequest(apiKey, request) {
-  const { id, model, cwd, prompt, systemPrompt } = request;
+  const { id, model, cwd, prompt } = request;
 
   // Validate required fields
   if (!id || !model || !cwd || !prompt) {
@@ -230,24 +273,21 @@ async function handleRequest(apiKey, request) {
 
   console.error(`[sdk-runner] Request ${id}: model=${model}, cwd=${cwd}`);
 
-  // NOTE: a fresh Agent is created per request (NOT cached/reused).
-  // The proxy sends the full conversation history in every prompt, so reusing
-  // an Agent would duplicate context across requests and leak conversation
-  // state between independent OpenCode sessions. Concurrent requests on a
-  // shared Agent would also interleave. The persistent process still saves
-  // the Node boot + SDK import cost (~2-3s) on every request after the first.
   let agent = null;
+  let retained = false;
   const timelineStart = Date.now();
   try {
     // Timing: Agent.create
     const createStart = Date.now();
-    agent = await Agent.create(buildAgentOptions({ apiKey, model, cwd, systemPrompt }));
+    const acquired = await acquireSdkAgent(apiKey, request);
+    agent = acquired.agent;
+    retained = acquired.retained;
     const createMs = Date.now() - createStart;
     console.error(`[sdk-runner] Agent ready, sending prompt for request ${id}`);
 
     // Timing: agent.send() until first event
     const sendStart = Date.now();
-    const run = await agent.send(prompt);
+    const run = await agent.send(acquired.prompt);
 
     let sawFinished = false;
     let eventCount = 0;
@@ -287,7 +327,7 @@ async function handleRequest(apiKey, request) {
     emitErrorEvent(id, message);
     emitDone(id, 1);
   } finally {
-    if (agent) {
+    if (agent && !retained) {
       await agent[Symbol.asyncDispose]?.().catch(() => {});
     }
   }
@@ -312,6 +352,7 @@ async function main() {
       const sdkModule = await import("@cursor/sdk");
       Agent = sdkModule.Agent;
       Cursor = sdkModule.Cursor;
+      sdkModule.configureCursorSdk({ local: { useHttp1ForAgent: true } });
     } catch (err) {
       console.error(`[sdk-runner] Failed to import @cursor/sdk: ${err.message}`);
       console.error("[sdk-runner] Note: sqlite3 native bindings may be incompatible with this platform");
@@ -323,6 +364,7 @@ async function main() {
     console.error("[sdk-runner] Waiting for requests on stdin...");
 
     const inFlight = new Set();
+    const conversationQueues = new Map();
 
     const dispatch = (request) => {
       let p;
@@ -338,14 +380,22 @@ async function main() {
           .finally(() => inFlight.delete(p));
       } else {
         // Handle regular agent request
-        p = handleRequest(apiKey, request)
+        const previous = request.conversationKey ? conversationQueues.get(request.conversationKey) : undefined;
+        p = (previous ? previous.catch(() => {}) : Promise.resolve())
+          .then(() => handleRequest(apiKey, request))
           .catch((err) => {
             const id = request?.id || "unknown";
             console.error(`[sdk-runner] Unhandled error processing request ${id}: ${err.message}`);
             emitErrorEvent(id, `Unhandled error: ${err.message}`);
             emitDone(id, 1);
           })
-          .finally(() => inFlight.delete(p));
+          .finally(() => {
+            inFlight.delete(p);
+            if (request.conversationKey && conversationQueues.get(request.conversationKey) === p) {
+              conversationQueues.delete(request.conversationKey);
+            }
+          });
+        if (request.conversationKey) conversationQueues.set(request.conversationKey, p);
       }
       inFlight.add(p);
     };
@@ -378,6 +428,7 @@ async function main() {
     // stdin closed: wait for in-flight requests, then shut down.
     console.error(`[sdk-runner] stdin closed, waiting for ${inFlight.size} in-flight request(s)`);
     await Promise.allSettled([...inFlight]);
+    await Promise.allSettled([...agents.values()].map(({ agent }) => agent[Symbol.asyncDispose]?.()));
     console.error("[sdk-runner] All requests processed, shutting down");
 
     // Flush stdout before exiting

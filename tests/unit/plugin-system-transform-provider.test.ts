@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { CursorPlugin } from "../../src/plugin";
+import { CursorPlugin, OPENCODE_CONVERSATION_HEADER } from "../../src/plugin";
 import type { PluginInput } from "@opencode-ai/plugin";
 
 function createMockInput(directory: string, worktree: string = directory): PluginInput {
@@ -37,5 +37,35 @@ describe("experimental.chat.system.transform", () => {
     await transform({ model: { providerID: "sglang" } }, output);
 
     expect(output.system).toBeUndefined();
+  });
+});
+
+describe("chat.headers", () => {
+  it("isolates Cursor conversations by session and agent", async () => {
+    const hooks = await CursorPlugin(createMockInput("/tmp/opencode-cursor-test"));
+    const headers = hooks["chat.headers"] as any;
+    const output = { headers: {} as Record<string, string> };
+
+    await headers({
+      sessionID: "session-1",
+      agent: "build",
+      model: { providerID: "cursor-acp" },
+    }, output);
+
+    expect(output.headers[OPENCODE_CONVERSATION_HEADER]).toBe("session-1:build");
+  });
+
+  it("does not identify conversations for other providers", async () => {
+    const hooks = await CursorPlugin(createMockInput("/tmp/opencode-cursor-test"));
+    const headers = hooks["chat.headers"] as any;
+    const output = { headers: {} as Record<string, string> };
+
+    await headers({
+      sessionID: "session-1",
+      agent: "build",
+      model: { providerID: "sglang" },
+    }, output);
+
+    expect(output.headers[OPENCODE_CONVERSATION_HEADER]).toBeUndefined();
   });
 });
