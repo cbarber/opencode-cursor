@@ -137,22 +137,12 @@ describe("opencode V2 adapter", () => {
     expect(await event.request.text()).toBe("probe");
   });
 
-  test("registers complete tools with one V2 add argument", async () => {
+  test("does not register duplicate tools in opencode mode", async () => {
     const { context, toolAddCalls } = createContext();
 
     await createV2Setup()(context);
 
-    expect(toolAddCalls.length).toBeGreaterThan(0);
-    for (const args of toolAddCalls) {
-      expect(args).toHaveLength(1);
-      expect(args[0]).toEqual(expect.objectContaining({
-        name: expect.any(String),
-        description: expect.any(String),
-        input: expect.any(Object),
-        execute: expect.any(Function),
-        options: { codemode: true },
-      }));
-    }
+    expect(toolAddCalls).toEqual([]);
   });
 
   test("does not resolve Cursor credentials for other providers", async () => {
@@ -208,7 +198,7 @@ describe("opencode V2 adapter", () => {
     expect(cleanup).toBeTypeOf("function");
     await cleanup!();
     expect(fixture.disposed.sort()).toEqual([
-      "catalog", "integration", "session:context", "session:http.request", "tool",
+      "catalog", "integration", "session:context", "session:http.request",
     ]);
   });
 });

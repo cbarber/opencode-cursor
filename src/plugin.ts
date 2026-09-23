@@ -2991,7 +2991,9 @@ export const CursorPlugin: Plugin = async ({ $, directory, worktree, client, ser
   const toolHookEntries = buildToolHookEntries(localRegistry, workspaceDirectory);
 
   return {
-    tool: { ...toolHookEntries, ...mcpToolEntries },
+    tool: TOOL_LOOP_MODE === "opencode"
+      ? {}
+      : { ...toolHookEntries, ...mcpToolEntries },
     auth: {
       provider: CURSOR_PROVIDER_ID,
       async loader(getAuth: () => Promise<Auth>) {

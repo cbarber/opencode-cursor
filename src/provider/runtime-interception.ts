@@ -114,6 +114,22 @@ export class ToolBoundaryExtractionError extends Error {
   }
 }
 
+function blockedPassthroughTermination(tool: string): ToolSchemaValidationTermination {
+  return {
+    reason: "schema_validation",
+    message: `Cursor requested unrecognized tool "${tool}"; refusing to bypass OpenCode tool hooks`,
+    tool,
+    errorClass: "validation",
+    missing: [],
+    unexpected: [],
+    typeErrors: [],
+  };
+}
+
+function allowToolPassthrough(): boolean {
+  return process.env.CURSOR_ACP_ALLOW_TOOL_PASSTHROUGH === "true";
+}
+
 export async function handleToolLoopEventLegacy(
   options: HandleToolLoopEventLegacyOptions,
 ): Promise<HandleToolLoopEventResult> {
@@ -143,6 +159,14 @@ export async function handleToolLoopEventLegacy(
 
   // Handle pass-through: unknown tools go to cursor-agent
   if (extraction.action === "passthrough") {
+    if (!allowToolPassthrough()) {
+      return {
+        intercepted: false,
+        skipConverter: true,
+        terminate: blockedPassthroughTermination(extraction.passthroughName ?? "unknown"),
+      };
+    }
+
     passThroughTracker?.trackTool(extraction.passthroughName!);
     log.debug("MCP tool passed through to cursor-agent (legacy)", {
       tool: extraction.passthroughName,
@@ -327,6 +351,14 @@ export async function handleToolLoopEventV1(
 
   // Handle pass-through: unknown tools go to cursor-agent
   if (extraction.action === "passthrough") {
+    if (!allowToolPassthrough()) {
+      return {
+        intercepted: false,
+        skipConverter: true,
+        terminate: blockedPassthroughTermination(extraction.passthroughName ?? "unknown"),
+      };
+    }
+
     passThroughTracker?.trackTool(extraction.passthroughName!);
     log.debug("MCP tool passed through to cursor-agent (v1)", {
       tool: extraction.passthroughName,

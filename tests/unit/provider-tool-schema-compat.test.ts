@@ -127,6 +127,35 @@ function editToolCall(args: Record<string, unknown>, id = "c_edit"): OpenAiToolC
 }
 
 describe("tool schema compatibility", () => {
+  it("maps Cursor read path to OpenCode filePath", () => {
+    const result = applyToolSchemaCompat(
+      {
+        id: "c_read",
+        type: "function",
+        function: {
+          name: "read",
+          arguments: JSON.stringify({ path: "/tmp/example.md" }),
+        },
+      },
+      new Map([
+        [
+          "read",
+          {
+            type: "object",
+            properties: { filePath: { type: "string" } },
+            required: ["filePath"],
+            additionalProperties: false,
+          },
+        ],
+      ]),
+    );
+
+    expect(JSON.parse(result.toolCall.function.arguments)).toEqual({
+      filePath: "/tmp/example.md",
+    });
+    expect(result.validation.ok).toBe(true);
+  });
+
   it("normalizes common argument aliases to canonical keys", () => {
     const result = applyToolSchemaCompat(
       {

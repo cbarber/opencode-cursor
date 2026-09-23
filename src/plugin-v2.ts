@@ -233,7 +233,7 @@ export function createV2Setup() {
     }));
 
     // Register local + MCP tools as V2 tools (best-effort).
-    try {
+    if (TOOL_LOOP_MODE !== "opencode") try {
       const toolHookEntries = buildToolHookEntries(localRegistry, workspaceDirectory);
       const allEntries = { ...toolHookEntries, ...mcpToolEntries };
 
