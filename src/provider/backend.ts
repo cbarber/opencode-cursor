@@ -15,6 +15,11 @@ export interface BackendPreferenceParseResult {
   valid: boolean;
 }
 
+export interface CursorSdkSystemPromptModeParseResult {
+  mode: CursorSdkSystemPromptMode;
+  valid: boolean;
+}
+
 export interface SelectBackendForRequestInput {
   preference: CursorBackendPreference;
   cursorAgentAvailable: boolean;
@@ -42,12 +47,12 @@ export function parseCursorBackendPreference(
 
 export function parseCursorSdkSystemPromptMode(
   value: string | undefined,
-): CursorSdkSystemPromptMode | undefined {
+): CursorSdkSystemPromptModeParseResult {
   const normalized = value?.trim().toLowerCase() || "message";
   if (normalized === "message" || normalized === "replace") {
-    return normalized;
+    return { mode: normalized, valid: true };
   }
-  return undefined;
+  return { mode: "message", valid: false };
 }
 
 export function selectInitialBackend(

@@ -318,9 +318,14 @@ export function resolvePromptForBackend(input: {
   model: string;
   workspaceDirectory: string;
 }): ResolvedPrompt {
-  const systemPromptMode = parseCursorSdkSystemPromptMode(
+  const { mode: systemPromptMode, valid: systemPromptModeValid } = parseCursorSdkSystemPromptMode(
     process.env.OPEN_CURSOR_SDK_SYSTEM_PROMPT_MODE,
-  ) || 'message';
+  );
+  if (!systemPromptModeValid) {
+    throw new Error(
+      "OPEN_CURSOR_SDK_SYSTEM_PROMPT_MODE must be either 'message' or 'replace'",
+    );
+  }
   const replaceSystemPrompt = input.backend === "sdk" && systemPromptMode === "replace";
   const systemPrompt = replaceSystemPrompt
     ? extractSystemPromptFromMessages(input.messages)
