@@ -1,9 +1,17 @@
-import { describe, it, expect } from "bun:test";
+import { afterAll, describe, it, expect } from "bun:test";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, mkdirSync, existsSync, symlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { CursorPlugin, shouldRegisterNativeToolHook } from "../../src/plugin";
 import type { PluginInput } from "@opencode-ai/plugin";
+
+const previousToolLoopMode = process.env.CURSOR_ACP_TOOL_LOOP_MODE;
+process.env.CURSOR_ACP_TOOL_LOOP_MODE = "proxy-exec";
+const { CursorPlugin, shouldRegisterNativeToolHook } = await import("../../src/plugin");
+
+afterAll(() => {
+  if (previousToolLoopMode === undefined) delete process.env.CURSOR_ACP_TOOL_LOOP_MODE;
+  else process.env.CURSOR_ACP_TOOL_LOOP_MODE = previousToolLoopMode;
+});
 
 function createMockInput(directory: string, worktree: string = directory): PluginInput {
   return {
@@ -47,13 +55,13 @@ describe("Plugin tool hook", () => {
     expect(hooks.tool).toBeDefined();
     expect(typeof hooks.tool).toBe("object");
 
-    // Verify local aliases are registered without shadowing OpenCode native tools.
+    // Verify proxy-exec registers local tools and aliases.
     const toolNames = Object.keys(hooks.tool || {});
     expect(toolNames).toContain("bash");
     expect(toolNames).toContain("shell");
     expect(toolNames).toContain("read");
-    expect(toolNames).not.toContain("write");
-    expect(toolNames).not.toContain("edit");
+    expect(toolNames).toContain("write");
+    expect(toolNames).toContain("edit");
     expect(toolNames).toContain("oc_edit");
     expect(toolNames).toContain("oc_write");
     expect(toolNames).toContain("oc_read");

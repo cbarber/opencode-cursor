@@ -419,6 +419,20 @@ function normalizeToolSpecificArgs(
     };
   }
 
+  if (normalizedToolName === "read") {
+    const normalized: JsonRecord = { ...args };
+    const schemaProperties = getSchemaPropertyNames(schema);
+    if (
+      schemaProperties.has("filePath")
+      && normalized.filePath === undefined
+      && typeof normalized.path === "string"
+    ) {
+      normalized.filePath = normalized.path;
+      delete normalized.path;
+    }
+    return normalized;
+  }
+
   if (isToolName(toolName, "write")) {
     const normalized: JsonRecord = { ...args };
     const schemaProperties = getSchemaPropertyNames(schema);

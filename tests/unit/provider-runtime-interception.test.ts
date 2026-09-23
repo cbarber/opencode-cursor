@@ -268,7 +268,7 @@ describe("provider runtime interception parity", () => {
     expect(resultsV1).toEqual([toolResult]);
   });
 
-  it("suppresses converter output for passthrough tool calls when requested", async () => {
+  it("blocks passthrough tool calls by default", async () => {
     const event: any = {
       type: "tool_call",
       call_id: "c2",
@@ -295,8 +295,53 @@ describe("provider runtime interception parity", () => {
       boundary: createProviderBoundary("v1", "cursor-acp"),
     });
 
-    expect(legacyResult).toEqual({ intercepted: false, skipConverter: true });
+    expect(legacyResult).toMatchObject({
+      intercepted: false,
+      skipConverter: true,
+      terminate: {
+        reason: "schema_validation",
+        tool: "browserNavigate",
+      },
+    });
     expect(v1Result).toEqual(legacyResult);
+  });
+
+  it("allows passthrough tool calls when explicitly enabled", async () => {
+    const previous = process.env.CURSOR_ACP_ALLOW_TOOL_PASSTHROUGH;
+    process.env.CURSOR_ACP_ALLOW_TOOL_PASSTHROUGH = "true";
+    try {
+      const event: any = {
+        type: "tool_call",
+        call_id: "c2",
+        tool_call: {
+          browserNavigateToolCall: {
+            args: { url: "https://example.com" },
+          },
+        },
+      };
+
+      const legacyResult = await handleToolLoopEventLegacy(
+        createBaseOptions({
+          event,
+          allowedToolNames: new Set(["read"]),
+          suppressConverterToolEvents: true,
+        }),
+      );
+      const v1Result = await handleToolLoopEventV1({
+        ...createBaseOptions({
+          event,
+          allowedToolNames: new Set(["read"]),
+          suppressConverterToolEvents: true,
+        }),
+        boundary: createProviderBoundary("v1", "cursor-acp"),
+      });
+
+      expect(legacyResult).toEqual({ intercepted: false, skipConverter: true });
+      expect(v1Result).toEqual(legacyResult);
+    } finally {
+      if (previous === undefined) delete process.env.CURSOR_ACP_ALLOW_TOOL_PASSTHROUGH;
+      else process.env.CURSOR_ACP_ALLOW_TOOL_PASSTHROUGH = previous;
+    }
   });
 });
 

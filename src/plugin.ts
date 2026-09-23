@@ -29,7 +29,7 @@ import {
 import { createLogger } from "./utils/logger.js";
 import { RequestPerf } from "./utils/perf.js";
 import { parseAgentError, formatErrorForUser, stripAnsi, isResumeSpecificFailure } from "./utils/errors.js";
-import { buildPromptFromMessages, buildToolFingerprint } from "./proxy/prompt-builder.js";
+import { buildPromptFromMessages, buildToolFingerprint, extractSystemPromptFromMessages } from "./proxy/prompt-builder.js";
 import {
   applyBridgeJsonPrompt,
   BridgeJsonStreamDetector,
@@ -96,6 +96,7 @@ import { createSdkBunChild, createSdkNodeChild } from "./client/sdk-child.js";
 import { createCursorAgentPoolNodeChild, isAgentPoolEnabled } from "./client/cursor-agent-child.js";
 import {
   parseCursorBackendPreference,
+  parseCursorSdkSystemPromptMode,
   resolveSdkApiKey,
   selectBackendForRequest,
   type CursorRuntimeBackend,
@@ -289,6 +290,7 @@ export function buildCursorAgentCommand(
  */
 export interface ResolvedPrompt {
   prompt: string;
+  systemPrompt?: string;
   resumeChatId?: string;
   sessionKey?: string;
   usedIncremental: boolean;
@@ -316,12 +318,32 @@ export function resolvePromptForBackend(input: {
   model: string;
   workspaceDirectory: string;
 }): ResolvedPrompt {
+  const { mode: systemPromptMode, valid: systemPromptModeValid } = parseCursorSdkSystemPromptMode(
+    process.env.OPEN_CURSOR_SDK_SYSTEM_PROMPT_MODE,
+  );
+  if (!systemPromptModeValid) {
+    throw new Error(
+      "OPEN_CURSOR_SDK_SYSTEM_PROMPT_MODE must be either 'message' or 'replace'",
+    );
+  }
+  const replaceSystemPrompt = input.backend === "sdk" && systemPromptMode === "replace";
+  const systemPrompt = replaceSystemPrompt
+    ? extractSystemPromptFromMessages(input.messages)
+    : undefined;
+  if (replaceSystemPrompt && !systemPrompt?.trim()) {
+    throw new Error(
+      "OPEN_CURSOR_SDK_SYSTEM_PROMPT_MODE=replace requires a non-empty system message",
+    );
+  }
+  const promptMessages = replaceSystemPrompt
+    ? input.messages.filter((message) => message.role !== "system")
+    : input.messages;
   let fullPrompt: string | undefined;
   const getFullPrompt = () =>
-    fullPrompt ??= buildPromptFromMessages(input.messages, input.tools);
+    fullPrompt ??= buildPromptFromMessages(promptMessages, input.tools);
 
   if (input.backend !== "cursor-agent" || !isSessionResumeEnabled()) {
-    return { prompt: getFullPrompt(), usedIncremental: false };
+    return { prompt: getFullPrompt(), systemPrompt, usedIncremental: false };
   }
 
   const anchorResult = deriveConversationAnchor(input.messages);
@@ -557,6 +579,7 @@ function createBunChildForBackend(input: {
   sdkApiKey?: string;
   model: string;
   prompt: string;
+  systemPrompt?: string;
   workspaceDirectory: string;
   resumeChatId?: string;
 }): any {
@@ -568,6 +591,7 @@ function createBunChildForBackend(input: {
       apiKey: input.sdkApiKey,
       model: input.model,
       prompt: input.prompt,
+      systemPrompt: input.systemPrompt,
       cwd: input.workspaceDirectory,
     });
   }
@@ -602,6 +626,7 @@ function createNodeChildForBackend(input: {
   sdkApiKey?: string;
   model: string;
   prompt: string;
+  systemPrompt?: string;
   workspaceDirectory: string;
   resumeChatId?: string;
 }): any {
@@ -613,6 +638,7 @@ function createNodeChildForBackend(input: {
       apiKey: input.sdkApiKey,
       model: input.model,
       prompt: input.prompt,
+      systemPrompt: input.systemPrompt,
       cwd: input.workspaceDirectory,
     });
   }
@@ -1169,8 +1195,8 @@ async function findFirstAllowedToolCallInOutput(
       proxyExecuteToolCalls: false,
       suppressConverterToolEvents: false,
       responseMeta: options.responseMeta,
-      onToolUpdate: () => {},
-      onToolResult: () => {},
+      onToolUpdate: () => { },
+      onToolResult: () => { },
       onInterceptedToolCall: (toolCall) => {
         interceptedToolCall = toolCall;
       },
@@ -1219,9 +1245,9 @@ export async function ensureCursorProxyServer(workspaceDirectory: string, toolRo
       authorizationHeader: authHeader,
     });
 
-      const handler = async (req: Request): Promise<Response> => {
-        try {
-          const url = new URL(req.url);
+  const handler = async (req: Request): Promise<Response> => {
+    try {
+      const url = new URL(req.url);
 
       if (url.pathname === "/health") {
         return new Response(JSON.stringify({ ok: true, workspaceDirectory }), {
@@ -1305,6 +1331,7 @@ export async function ensureCursorProxyServer(workspaceDirectory: string, toolRo
       });
       const prompt = applyBridgeJsonPrompt(resolvedPrompt.prompt, { allowedToolNames });
       const {
+        systemPrompt,
         resumeChatId,
         sessionKey: sessionResumeKey,
         usedIncremental,
@@ -1344,6 +1371,7 @@ export async function ensureCursorProxyServer(workspaceDirectory: string, toolRo
         sdkApiKey,
         model,
         prompt,
+        systemPrompt,
         workspaceDirectory,
         resumeChatId,
       });
@@ -1874,7 +1902,7 @@ export async function ensureCursorProxyServer(workspaceDirectory: string, toolRo
   const http = await import("http");
 
   const requestHandler = async (req: any, res: any) => {
-    try{
+    try {
       const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
       if (url.pathname === "/health") {
@@ -1947,6 +1975,7 @@ export async function ensureCursorProxyServer(workspaceDirectory: string, toolRo
       });
       const prompt = applyBridgeJsonPrompt(resolvedPrompt.prompt, { allowedToolNames });
       const {
+        systemPrompt,
         resumeChatId,
         sessionKey: sessionResumeKey,
         usedIncremental,
@@ -1987,6 +2016,7 @@ export async function ensureCursorProxyServer(workspaceDirectory: string, toolRo
         sdkApiKey: sdkApiKeyNode,
         model,
         prompt,
+        systemPrompt,
         workspaceDirectory,
         resumeChatId,
       });
@@ -2822,7 +2852,7 @@ export const CursorPlugin: Plugin = async ({ $, directory, worktree, client, ser
   await ensurePluginDirectory();
 
   // Auto-refresh model list from cursor-agent (non-blocking, fire-and-forget)
-  autoRefreshModels().catch(() => {});
+  autoRefreshModels().catch(() => { });
 
   // MCP tool bridge: connect to MCP servers and register their tools.
   // We await init so tools are available before the plugin returns its tool hook.
@@ -2905,10 +2935,10 @@ export const CursorPlugin: Plugin = async ({ $, directory, worktree, client, ser
 
   const router = legacyProxyToolPathsEnabled
     ? new ToolRouter({
-        execute: (toolId, args) => executeWithChain(executorChain, toolId, args),
-        toolsByName,
-        resolveName: (name) => skillResolver?.resolve(name),
-      })
+      execute: (toolId, args) => executeWithChain(executorChain, toolId, args),
+      toolsByName,
+      resolveName: (name) => skillResolver?.resolve(name),
+    })
     : null;
   let lastToolNames: string[] = [];
   let lastToolMap: Array<{ id: string; name: string }> = [];
@@ -2991,7 +3021,9 @@ export const CursorPlugin: Plugin = async ({ $, directory, worktree, client, ser
   const toolHookEntries = buildToolHookEntries(localRegistry, workspaceDirectory);
 
   return {
-    tool: { ...toolHookEntries, ...mcpToolEntries },
+    tool: TOOL_LOOP_MODE === "opencode"
+      ? {}
+      : { ...toolHookEntries, ...mcpToolEntries },
     auth: {
       provider: CURSOR_PROVIDER_ID,
       async loader(getAuth: () => Promise<Auth>) {

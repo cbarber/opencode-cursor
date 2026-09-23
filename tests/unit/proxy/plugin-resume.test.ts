@@ -18,6 +18,7 @@ describe("plugin resume orchestration", () => {
   afterEach(() => {
     _resetSessionResumeCache();
     delete process.env.CURSOR_ACP_SESSION_RESUME;
+    delete process.env.OPEN_CURSOR_SDK_SYSTEM_PROMPT_MODE;
   });
 
   const baseInput = {
@@ -36,6 +37,56 @@ describe("plugin resume orchestration", () => {
     expect(result.prompt).toBe("USER: Remember BETA");
     expect(result.resumeChatId).toBeUndefined();
     expect(result.usedIncremental).toBe(false);
+  });
+
+  it("resolvePromptForBackend: SDK keeps the OpenCode system prompt in message mode by default", () => {
+    const result = resolvePromptForBackend({
+      ...baseInput,
+      backend: "sdk" as const,
+      messages: [
+        { role: "system", content: "OpenCode system" },
+        { role: "system", content: [{ type: "text", text: "Additional rules" }] },
+        { role: "user", content: "Remember BETA" },
+      ],
+    });
+
+    expect(result.systemPrompt).toBeUndefined();
+    expect(result.prompt).toContain("SYSTEM: OpenCode system");
+    expect(result.prompt).toContain("SYSTEM: Additional rules");
+    expect(result.prompt).toContain("USER: Remember BETA");
+  });
+
+  it("resolvePromptForBackend: SDK replacement separates ordered system text", () => {
+    process.env.OPEN_CURSOR_SDK_SYSTEM_PROMPT_MODE = "replace";
+    const result = resolvePromptForBackend({
+      ...baseInput,
+      backend: "sdk" as const,
+      messages: [
+        { role: "system", content: "OpenCode system" },
+        { role: "system", content: [{ type: "text", text: "Additional rules" }] },
+        { role: "user", content: "Remember BETA" },
+      ],
+    });
+
+    expect(result.systemPrompt).toBe("OpenCode system\n\nAdditional rules");
+    expect(result.prompt).toBe("USER: Remember BETA");
+  });
+
+  it("resolvePromptForBackend: SDK replacement rejects empty system text", () => {
+    process.env.OPEN_CURSOR_SDK_SYSTEM_PROMPT_MODE = "replace";
+    expect(() => resolvePromptForBackend({
+      ...baseInput,
+      backend: "sdk" as const,
+      messages: [{ role: "system", content: "   " }, { role: "user", content: "Hello" }],
+    })).toThrow("replace requires a non-empty system message");
+  });
+
+  it("resolvePromptForBackend: SDK rejects an invalid system prompt mode", () => {
+    process.env.OPEN_CURSOR_SDK_SYSTEM_PROMPT_MODE = "invalid";
+    expect(() => resolvePromptForBackend({
+      ...baseInput,
+      backend: "sdk" as const,
+    })).toThrow("must be either 'message' or 'replace'");
   });
 
   it("resolvePromptForBackend: enabled + no chatId → full prompt + sessionKey", () => {

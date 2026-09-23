@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "bun:test";
-import { buildPromptFromMessages, _resetToolSchemaCache } from "../../../src/proxy/prompt-builder.js";
+import { buildPromptFromMessages, extractSystemPromptFromMessages, _resetToolSchemaCache } from "../../../src/proxy/prompt-builder.js";
 
 describe("buildPromptFromMessages", () => {
   beforeEach(() => {
@@ -387,5 +387,22 @@ describe("buildPromptFromMessages", () => {
 
     // The caller's array must remain in its original order, not sorted in place.
     expect(required).toEqual(["path", "encoding"]);
+  });
+});
+
+describe("extractSystemPromptFromMessages", () => {
+  it("preserves ordered system text without non-system content", () => {
+    expect(extractSystemPromptFromMessages([
+      { role: "system", content: "First" },
+      { role: "user", content: "Ignore me" },
+      {
+        role: "system",
+        content: [
+          { type: "text", text: "Second" },
+          { type: "image_url", image_url: { url: "ignored" } },
+          { type: "text", text: "Third" },
+        ],
+      },
+    ])).toBe("First\n\nSecond\nThird");
   });
 });

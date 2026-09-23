@@ -2,7 +2,7 @@
  * sdk-child.ts
  *
  * Spawns sdk-runner.mjs as a persistent singleton process.
- * The runner reads NDJSON requests from stdin: {"id":"...","model":"...","cwd":"...","prompt":"..."}
+ * The runner reads NDJSON requests from stdin with an optional `systemPrompt` field.
  * and emits wrapped NDJSON responses to stdout: {"id":"...","event":{...}} or {"id":"...","done":true,"exitCode":...}
  *
  * This module demultiplexes per-request by:
@@ -214,12 +214,18 @@ class SdkRunnerSingleton {
   /**
    * Send a request to the runner.
    */
-  sendRequest(requestId: string, model: string, cwd: string, prompt: string): void {
+  sendRequest(requestId: string, model: string, cwd: string, prompt: string, systemPrompt?: string): void {
     if (!this.runnerProcess || !this.runnerProcess.stdin) {
       throw new Error("Runner process not ready");
     }
 
-    const request = { id: requestId, model, cwd, prompt };
+    const request = {
+      id: requestId,
+      model,
+      cwd,
+      prompt,
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    };
     this.runnerProcess.stdin.write(JSON.stringify(request) + "\n");
   }
 
@@ -331,6 +337,7 @@ export function createSdkBunChild(options: {
   apiKey: string;
   model: string;
   prompt: string;
+  systemPrompt?: string;
   cwd: string;
 }): SdkBunChild {
   log.info("creating sdk bun child", {
@@ -358,7 +365,7 @@ export function createSdkBunChild(options: {
         log.info(`request ${requestId} registered (bun)`);
 
         // Send the request to the runner
-        singleton.sendRequest(requestId, options.model, options.cwd, options.prompt);
+        singleton.sendRequest(requestId, options.model, options.cwd, options.prompt, options.systemPrompt);
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
         log.error("Failed to start request (bun)", { error: error.message });
@@ -404,7 +411,7 @@ export class SdkNodeChild extends EventEmitter {
 
   private requestId: string | null = null;
 
-  async spawn(options: { apiKey: string; model: string; prompt: string; cwd: string }) {
+  async spawn(options: { apiKey: string; model: string; prompt: string; systemPrompt?: string; cwd: string }) {
     try {
       log.info("spawning (via singleton) sdk node child", {
         model: options.model,
@@ -451,7 +458,7 @@ export class SdkNodeChild extends EventEmitter {
       log.info(`request ${requestId} registered (node)`);
 
       // Send the request to the runner
-      singleton.sendRequest(requestId, options.model, options.cwd, options.prompt);
+      singleton.sendRequest(requestId, options.model, options.cwd, options.prompt, options.systemPrompt);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       log.error("Failed to spawn sdk node child", { error: error.message });
@@ -471,6 +478,7 @@ export function createSdkNodeChild(options: {
   apiKey: string;
   model: string;
   prompt: string;
+  systemPrompt?: string;
   cwd: string;
 }): SdkNodeChild {
   const child = new SdkNodeChild();
@@ -546,5 +554,3 @@ export async function listModelsViaRunner(apiKey: string): Promise<Array<{ id: s
     throw new Error(`listModelsViaRunner failed: ${String(err)}`);
   }
 }
-
-
